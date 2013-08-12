@@ -193,9 +193,6 @@ threadmain(int argc, char *argv[])
 	mbox.name = estrstrdup(maildir, s);
 	mbox.level= 0;
 	readmbox(&mbox, maildir, s);
-	home = getenv("home");
-	if(home == nil)
-		home = "/";
 
 	wbox = newwindow();
 	winname(wbox, mbox.name);
