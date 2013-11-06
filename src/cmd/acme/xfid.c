@@ -791,6 +791,41 @@ out:
 			wincleartag(w);
 			settag = TRUE;
 			m = 8;
+		}else
+		if(strncmp(p, "events ", 7) == 0){	/* set events mask */
+			pp = p+7;
+			m = 7;
+			q = memchr(pp, '\n', e-pp);
+			if(q == nil || q == pp){
+				err = Ebadctl;
+				break;
+			}
+			*q = 0;
+			uchar em = 0;
+			for(i=0; pp+i<q; i++)
+				if(pp[i] == 'd')
+					em |= ETdelete;
+				else if(pp[i] == 'D')
+					em |= EBdelete;
+				else if(pp[i] == 'i')
+					em |= ETinsert;
+				else if(pp[i] == 'I')
+					em |= EBinsert;
+				else if(pp[i] == 'l')
+					em |= ETlook;
+				else if(pp[i] == 'L')
+					em |= EBlook;
+				else if(pp[i] == 'x')
+					em |= ETexecute;
+				else if(pp[i] == 'X')
+					em |= EBexecute;
+				else {
+					err = "invalid event type";
+					break;
+				}
+			if (err == nil)
+				w->evtype = em;
+			m += (q+1) - pp;
 		}else{
 			err = Ebadctl;
 			break;
