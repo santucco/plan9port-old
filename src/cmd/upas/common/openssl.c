@@ -13,7 +13,7 @@ AUTOLIB(crypto)
 
 enum
 {
-	STACK = 8192,
+	TSTACK = 8192,
 	BSIZE = 0x10000
 };
 
@@ -123,6 +123,6 @@ opensslhandshake(int fd)
 	pssl->ssl = ssl;
 	pssl->fd = fds[0];
 	pssl->efd = fd;
-	proccreate(opensslproc, pssl, STACK);
+	proccreate(opensslproc, pssl, TSTACK);
 	return fds[1];
 }
