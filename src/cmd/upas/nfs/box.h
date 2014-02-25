@@ -44,6 +44,8 @@ struct Box
 	Box*		parent;		/* in tree */
 	Box**	sub;
 	uint		nsub;
+	int		lbound;		/* lower bound of range of fetched messages*/
+	int		ubound;		/* upper bound of range of fetched messages*/
 };
 
 struct Hdr
@@ -120,7 +122,8 @@ Part*	partcreate(Msg*, Part*);
 void		hdrfree(Hdr*);
 
 Msg*	msgbyid(Box*, uint);
-Msg*	msgbyimapuid(Box*, uint, int);
+Msg*	msgbyimapuid(Box*, uint);
+Msg*	msgbyimapid(Box*, uint);
 void		msgfree(Msg*);
 void		msgplumb(Msg*, int);
 
