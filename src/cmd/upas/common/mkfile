@@ -8,6 +8,7 @@ OFILES=\
 	config.$O\
 	libsys.$O\
 	mail.$O\
+	openssl.$O\
 	process.$O\
 
 HFILES=\

@@ -10,6 +10,7 @@
 
 #include "a.h"
 #include <libsec.h>
+#include "common.h"
 
 struct Imap
 {
@@ -779,7 +780,7 @@ imapdial(char *server, int mode)
 	int p[2];
 	int fd[3];
 	char *tmp;
-	
+
 	switch(mode){
 	default:
 	case Unencrypted:
@@ -790,21 +791,17 @@ imapdial(char *server, int mode)
 		return -1;
 
 	case Tls:
+#ifdef PLAN9PORT
+		USED(tmp);
+		return opensslhandshake(dial(netmkaddr(server, "tcp", "993"), nil, nil, nil));
+#else
 		if(pipe(p) < 0)
 			return -1;
 		fd[0] = dup(p[0], -1);
 		fd[1] = dup(p[0], -1);
 		fd[2] = dup(2, -1);
-#ifdef PLAN9PORT
-		tmp = esmprint("%s:993", server);
-		if(threadspawnl(fd, "/usr/sbin/stunnel3", "stunnel3", "-c", "-r", tmp, nil) < 0
-		    && threadspawnl(fd, "/usr/bin/stunnel3", "stunnel3", "-c", "-r", tmp, nil) < 0
-		    && threadspawnl(fd, "/usr/sbin/stunnel", "stunnel", "-c", "-r", tmp, nil) < 0
-		    && threadspawnl(fd, "/usr/bin/stunnel", "stunnel", "-c", "-r", tmp, nil) < 0){
-#else
 		tmp = esmprint("tcp!%s!993", server);
 		if(threadspawnl(fd, "/bin/tlsclient", "tlsclient", tmp, nil) < 0){
-#endif
 			free(tmp);
 			close(p[0]);
 			close(p[1]);
@@ -816,6 +813,7 @@ imapdial(char *server, int mode)
 		free(tmp);
 		close(p[0]);
 		return p[1];
+#endif
 	
 	case Cmd:
 		if(pipe(p) < 0)
