@@ -389,7 +389,7 @@ textinsert(Text *t, uint q0, Rune *r, uint n, int tofile)
 		t->org += n;
 	else if(q0 <= t->org+t->fr.nchars)
 		frinsert(&t->fr, r, r+n, q0-t->org);
-	if(t->w){
+	if(t->w && (t->w->evtype&EBinsert && t->what == Body || t->w->evtype&ETinsert && t->what != Body)){
 		c = 'i';
 		if(t->what == Body)
 			c = 'I';
@@ -494,7 +494,7 @@ textdelete(Text *t, uint q0, uint q1, int tofile)
 		frdelete(&t->fr, p0, p1);
 		textfill(t);
 	}
-	if(t->w){
+	if(t->w && (t->w->evtype&EBdelete && t->what == Body || t->w->evtype&ETdelete && t->what != Body)){
 		c = 'd';
 		if(t->what == Body)
 			c = 'D';

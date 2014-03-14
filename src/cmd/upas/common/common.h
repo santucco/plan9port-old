@@ -77,4 +77,4 @@ extern int	proc_wait(process*);
 extern int	proc_free(process*);
 extern int	proc_kill(process*);
 
-
+extern int	opensslhandshake(int);

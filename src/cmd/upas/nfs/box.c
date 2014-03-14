@@ -243,17 +243,50 @@ msgcreate(Box *box)
 }
 
 Msg*
+bsrch(Box* box, uint id, int(*cmp)(Msg* msg, uint id))
+{
+	uint first = 0; 
+	uint last = box->nmsg;
+	uint mid = first+(last-first)/2;
+
+	if (box == nil || box->nmsg==0 || cmp(box->msg[0], id)==1 || cmp(box->msg[last-1], id)==-1)
+		return nil;
+	while(first<last){
+		switch(cmp(box->msg[mid], id)){
+		case 0:
+			return box->msg[mid];
+		case 1:
+			last = mid;
+			break;
+		case -1:
+			first = mid+1;
+			break;
+		}
+		mid = first+(last-first)/2;
+	}
+	return nil;
+}
+
+static int
+cmpbyimapuid(Msg* msg, uint id)
+{
+	if(msg->imapuid<id)
+		return -1;
+	else if(msg->imapuid>id)
+		return 1;
+	return 0;
+}
+
+Msg*
 msgbyimapuid(Box *box, uint uid, int docreate)
 {
-	int i;
 	Msg *msg;
 
 	if(box == nil)
 		return nil;
-	/* LATER: binary search or something */
-	for(i=0; i<box->nmsg; i++)
-		if(box->msg[i]->imapuid == uid)
-			return box->msg[i];
+	msg=bsrch(box, uid, cmpbyimapuid);
+	if(msg!=nil)
+		return msg;
 	if(!docreate)
 		return nil;
 	msg = msgcreate(box);
@@ -261,18 +294,22 @@ msgbyimapuid(Box *box, uint uid, int docreate)
 	return msg;
 }
 
+static int
+cmpbyid(Msg* msg, uint id)
+{
+	if(msg->id<id)
+		return -1;
+	else if(msg->id>id)
+		return 1;
+	return 0;
+}
+
 Msg*
 msgbyid(Box *box, uint id)
 {
-	int i;
-
 	if(box == nil)
 		return nil;
-	/* LATER: binary search or something */
-	for(i=0; i<box->nmsg; i++)
-		if(box->msg[i]->id == id)
-			return box->msg[i];
-	return nil;
+	return bsrch(box, id, cmpbyid);
 }
 
 Part*
