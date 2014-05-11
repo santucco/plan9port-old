@@ -163,9 +163,7 @@ msgplumb(Msg *m, int delete)
 	char buf[256], date[40];
 	int ai;
 	
-	if(m == nil || m->npart < 1 || m->part[0]->hdr == nil)
-		return;
-	if(m->box && strcmp(m->box->name, "mbox") != 0)
+	if(m == nil)
 		return;
 
 	p.src = "mailfs";
@@ -181,24 +179,26 @@ msgplumb(Msg *m, int delete)
 	a[ai].value = delete?"delete":"new";
 	a[ai-1].next = &a[ai];
 
-	if(m->part[0]->hdr->from){
-		a[++ai].name = "sender";
-		a[ai].value = m->part[0]->hdr->from;
-		a[ai-1].next = &a[ai];
-	}
+	if (m->npart >= 1 && m->part[0]->hdr != nil){
+		if(m->part[0]->hdr->from){
+			a[++ai].name = "sender";
+			a[ai].value = m->part[0]->hdr->from;
+			a[ai-1].next = &a[ai];
+		}
 
-	if(m->part[0]->hdr->subject){
-		a[++ai].name = "subject";
-		a[ai].value = m->part[0]->hdr->subject;
-		a[ai-1].next = &a[ai];
-	}
+		if(m->part[0]->hdr->subject){
+			a[++ai].name = "subject";
+			a[ai].value = m->part[0]->hdr->subject;
+			a[ai-1].next = &a[ai];
+		}
 
-	if(m->part[0]->hdr->digest){
-		a[++ai].name = "digest";
-		a[ai].value = m->part[0]->hdr->digest;
-		a[ai-1].next = &a[ai];
+		if(m->part[0]->hdr->digest){
+			a[++ai].name = "digest";
+			a[ai].value = m->part[0]->hdr->digest;
+			a[ai-1].next = &a[ai];
+		}
 	}
-	
+		
 	strcpy(date, ctime(m->date));
 	date[strlen(date)-1] = 0;	/* newline */
 	a[++ai].name = "date";
@@ -278,20 +278,11 @@ cmpbyimapuid(Msg* msg, uint id)
 }
 
 Msg*
-msgbyimapuid(Box *box, uint uid, int docreate)
+msgbyimapuid(Box *box, uint uid)
 {
-	Msg *msg;
-
 	if(box == nil)
 		return nil;
-	msg=bsrch(box, uid, cmpbyimapuid);
-	if(msg!=nil)
-		return msg;
-	if(!docreate)
-		return nil;
-	msg = msgcreate(box);
-	msg->imapuid = uid;
-	return msg;
+	return bsrch(box, uid, cmpbyimapuid);
 }
 
 static int
@@ -310,6 +301,24 @@ msgbyid(Box *box, uint id)
 	if(box == nil)
 		return nil;
 	return bsrch(box, id, cmpbyid);
+}
+
+static int
+cmpbyimapid(Msg* msg, uint id)
+{
+	if(msg->imapid<id)
+		return -1;
+	else if(msg->imapid>id)
+		return 1;
+	return 0;
+}
+
+Msg*
+msgbyimapid(Box *box, uint id)
+{
+	if(box == nil)
+		return nil;
+	return bsrch(box, id, cmpbyimapid);
 }
 
 Part*

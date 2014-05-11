@@ -485,6 +485,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 	case Qbcc:
 	case Qinreplyto:
 	case Qmessageid:
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part->hdr == nil){
 			werrstr(Emsggone);
 			return -1;
@@ -498,6 +500,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 		return 0;
 
 	case Qunixheader:
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part->hdr == nil){
 			werrstr(Emsggone);
 			return -1;
@@ -619,6 +623,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 
 	case Qinfo:
 		fmtstrinit(&fmt);
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part == msg->part[0]){
 			if(msg->date)
 				fmtprint(&fmt, "unixdate %ud %s", msg->date, ctime(msg->date));
@@ -665,6 +671,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 		return 0;
 
 	case Qheader:
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part->hdr == nil)
 			return 0;
 		fmtstrinit(&fmt);
