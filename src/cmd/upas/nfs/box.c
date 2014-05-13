@@ -27,6 +27,18 @@ boxbyname(char *name)
 }
 
 Box*
+boxbyalias(char *alias)
+{
+	int i;
+
+	/* LATER: replace with hash table */
+	for(i=0; i<nboxes; i++)
+		if(boxes[i] && strcmp(boxes[i]->alias, alias) == 0)
+			return boxes[i];
+	return nil;
+}
+
+Box*
 subbox(Box *b, char *elem)
 {
 	int i;
@@ -73,6 +85,8 @@ boxcreate(char *name)
 		bb = rootbox;
 		b->elem = b->name;
 	}
+	b->alias=b->elem;
+
 	if(nboxes%BoxChunk == 0)
 		boxes = erealloc(boxes, (nboxes+BoxChunk)*sizeof boxes[0]);
 	boxes[nboxes++] = b;
@@ -80,6 +94,7 @@ boxcreate(char *name)
 		bb->sub = erealloc(bb->sub, (bb->nsub+BoxSubChunk)*sizeof bb->sub[0]);
 	bb->sub[bb->nsub++] = b;
 	b->parent = bb;
+
 	return b;
 }
 
@@ -93,7 +108,11 @@ boxfree(Box *b)
 	for(i=0; i<b->nmsg; i++)
 		msgfree(b->msg[i]);
 	free(b->msg);
+	if(b->alias != b->elem)
+		free(b->alias);
+	free(b->name);
 	free(b);
+
 }
 
 Part*
@@ -160,8 +179,9 @@ msgplumb(Msg *m, int delete)
 	static int fd = -1;
 	Plumbmsg p;
 	Plumbattr a[10];
-	char buf[256], date[40];
+	char buf[256], abuf[256], date[40];
 	int ai;
+	Box* par;
 	
 	if(m == nil)
 		return;
@@ -208,11 +228,20 @@ msgplumb(Msg *m, int delete)
 	a[ai].next = nil;
 	
 	p.attr = a;
+	
+	snprint(abuf, sizeof abuf, "%s/%ud", m->box->alias, m->id);
+	par=m->box->parent;
+	while(par != rootbox){
+		snprint(buf, sizeof buf, "%s/%s", par->alias, abuf);
+		strncpy(abuf, buf, sizeof abuf);
+		par=par->parent;	
+	}
 #ifdef PLAN9PORT
-	snprint(buf, sizeof buf, "Mail/%s/%ud", m->box->name, m->id);
+	snprint(buf, sizeof buf, "Mail/%s", abuf);
 #else
-	snprint(buf, sizeof buf, "/mail/fs/%s/%ud", m->box->name, m->id);
+	snprint(buf, sizeof buf, "/mail/fs/", abuf);
 #endif
+
 	p.ndata = strlen(buf);
 	p.data = buf;
 	

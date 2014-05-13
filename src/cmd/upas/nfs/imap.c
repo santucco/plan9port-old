@@ -28,7 +28,6 @@ struct Imap
 	QLock	rlk;
 	Rendez	r;
 
-	Box*		inbox;
 	Box*		box;
 	Box*		nextbox;
 
@@ -151,8 +150,6 @@ imapreconnect(Imap *z)
 
 	z->autoreconnect = 0;
 	z->box = nil;
-	z->inbox = nil;
-
 	if(z->fd >= 0){
 		close(z->fd);
 		z->fd = -1;
@@ -183,7 +180,7 @@ imapreconnect(Imap *z)
 	if(imaplogin(z) < 0)
 		goto err;
 preauth:
-	if(getboxes(z) < 0 || getbox(z, z->inbox) < 0)
+	if(getboxes(z) < 0)
 		goto err;
 	z->autoreconnect = 1;
 	return 0;
@@ -1340,10 +1337,72 @@ alldollars(char *s)
 	return 1;
 }
 
+
+static char*
+utf7to8(char* s)
+{
+	char* b = s;
+	char* e;
+	char* p;
+	uchar* d;
+	char* res = emalloc(strlen(s));
+	int n, i, c;
+	Rune r;
+	int f = 0;
+
+	if(!res)
+		return s;
+	p = res;
+	while(*b != 0) {
+		if((*b>=0x20 && *b<=0x25) || (*b>=0x27 && *b<=0x7e)){
+			*p++ = *b++;
+			continue;
+		}
+		f = 1;
+		if(*b != '&'){
+			return res;
+		}
+		b++;
+		if(*b=='-'){
+			*p++ = '&';
+			b++;
+			continue;
+		}
+		e = b;
+		while(*e != '-' && *e != 0)
+			e++;
+		if(*e == 0){
+			free(res);
+			return s;
+		}
+		d = emalloc(e - b);
+		n = dec64(d, e - b, b, e - b);
+		if(n == -1) {
+			free(d);
+			free(res);
+			return s;
+		}
+		for(i=0; i < n; i+=2){
+			r = nhgets(d+i);
+			c = runetochar(p, &r);
+			p += c;
+		}
+		*p = 0;
+		free(d);
+		b = e;
+		b++;
+	}
+	*p = 0;
+	if(!f){
+		free(res);
+		return s;
+	}
+	return res;
+}
+
 static void
 xlist(Imap *z, Sx *sx)
 {
-	int inbox;
 	char *s, *t;
 	Box *box;
 
@@ -1353,29 +1412,8 @@ xlist(Imap *z, Sx *sx)
 		s = gsub(s, sx->sx[3]->data, "/");
 	}
 
-	/*
-	 * INBOX is the special imap name for the main mailbox.
-	 * All other mailbox names have the root prefix removed, if applicable.
-	 */
-	inbox = 0;
-	if(cistrcmp(s, "INBOX") == 0){
-		inbox = 1;
-		free(s);
-		s = estrdup("mbox");
-	} else if(z->root && strstr(s, z->root) == s) {
+	if(z->root && strstr(s, z->root) == s) {
 		t = estrdup(s+strlen(z->root));
-		free(s);
-		s = t;
-	}
-	
-	/* 
-	 * Plan 9 calls the main mailbox mbox.  
-	 * Rename any existing mbox by appending a $.
-	 */
-	if(!inbox && strncmp(s, "mbox", 4) == 0 && alldollars(s+4)){
-		t = emalloc(strlen(s)+2);
-		strcpy(t, s);
-		strcat(t, "$");
 		free(s);
 		s = t;
 	}
@@ -1383,9 +1421,30 @@ xlist(Imap *z, Sx *sx)
 	box = boxcreate(s);
 	if(box == nil)
 		return;
+
+	/*
+	 * INBOX is the special imap name for the main mailbox.
+	 * All other mailbox names have the root prefix removed, if applicable.
+	 */
+
+	if(cistrcmp(s, "INBOX") == 0){
+		box->alias = estrdup("mbox");
+	}
+	/* 
+	 * Plan 9 calls the main mailbox mbox.  
+	 * Rename any existing mbox by appending a $.
+	 */
+	else if(strncmp(s, "mbox", 4) == 0 && alldollars(s+4)){
+		t = emalloc(strlen(s)+2);
+		strcpy(t, s);
+		strcat(t, "$");
+		box->alias = t;
+	}
+	free(s);
+
+	box->alias = utf7to8(box->alias);
+
 	box->imapname = estrdup(sx->sx[4]->data);
-	if(inbox)
-		z->inbox = box;
 	box->mark = 0;
 	box->flags = parseflags(sx->sx[2]);
 }

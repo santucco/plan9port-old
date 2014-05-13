@@ -23,6 +23,7 @@ struct Box
 {
 	char*	name;		/* name of mailbox */
 	char*	elem;		/* last element in name */
+	char*	alias;		/* alias of mailbox */
 	uint		ix;			/* index in box[] array */
 	uint		id;			/* id shown in file system */
 	uint		flags;		/* FlagNoInferiors, etc. */
@@ -112,6 +113,7 @@ struct Part
 
 void		boxinit(void);
 Box*		boxbyname(char*);
+Box*		boxbyalias(char*);
 Box*		boxbyid(uint);
 Box*		boxcreate(char*);
 void		boxfree(Box*);

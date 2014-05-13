@@ -255,7 +255,7 @@ fswalk1(Fid *fid, char *name, void *arg)
 			fid->qid = qid(Qctl, nil, nil, nil);
 			return nil;
 		}
-		if((box = boxbyname(name)) != nil){
+		if((box = boxbyalias(name)) != nil){
 			fid->qid = qid(Qbox, box, nil, nil);
 			return nil;
 		}
@@ -766,7 +766,7 @@ filldir(Dir *d, int type, Box *box, Msg *msg, Part *part)
 			werrstr(Enobox);
 			return -1;
 		}
-		d->name = estrdup9p(box->elem);
+		d->name = estrdup9p(box->alias);
 		break;
 	case Qmsg:
 		if(msg == nil){
