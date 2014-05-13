@@ -68,6 +68,7 @@ typedef	struct	Text Text;
 typedef	struct	Timer Timer;
 typedef	struct	Window Window;
 typedef	struct	Xfid Xfid;
+typedef	struct	RX RX;
 
 struct Runestr
 {
