@@ -310,8 +310,10 @@ connect(char* net)
 	return 0;
 }
 
+#ifndef PLAN9PORT
 static char smtpthumbs[] =	"/sys/lib/tls/smtp";
 static char smtpexclthumbs[] =	"/sys/lib/tls/smtp.exclude";
+#endif
 
 /*
  *  exchange names with remote host, attempt to
@@ -321,20 +323,25 @@ static char smtpexclthumbs[] =	"/sys/lib/tls/smtp.exclude";
 static char *
 dotls(char *me)
 {
+	int fd;
+#ifndef PLAN9PORT
 	TLSconn *c;
 	Thumbprint *goodcerts;
 	char *h;
-	int fd;
 	uchar hash[SHA1dlen];
-
-	return Giveup;
-
-	c = mallocz(sizeof(*c), 1);	/* Note: not freed on success */
-	if (c == nil)
-		return Giveup;
+#endif
 
 	dBprint("STARTTLS\r\n");
 	if (getreply() != 2)
+		return Giveup;
+
+#ifdef PLAN9PORT
+	fd=opensslhandshake(Bfildes(&bout));
+	if(fd < 0)
+		return Giveup;
+#else
+	c = mallocz(sizeof(*c), 1);	/* Note: not freed on success */
+	if (c == nil)
 		return Giveup;
 
 	fd = tlsClient(Bfildes(&bout), c);
@@ -368,6 +375,7 @@ dotls(char *me)
 		return Giveup;		/* how to recover? TLS is started */
 	}
 	freeThumbprints(goodcerts);
+#endif
 	Bterm(&bin);
 	Bterm(&bout);
 

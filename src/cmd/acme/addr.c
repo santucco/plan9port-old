@@ -123,29 +123,35 @@ regexp(uint showerr, Text *t, Range lim, Range r, Rune *pat, int dir, int *found
 	int found;
 	Rangeset sel;
 	int q;
+	RX* rx;
 
-	if(pat[0] == '\0' && rxnull()){
+	if(pat[0] == '\0'){
 		if(showerr)
 			warning(nil, "no previous regular expression\n");
 		*foundp = FALSE;
 		return r;
 	}
-	if(pat[0] && rxcompile(pat) == FALSE){
-		*foundp = FALSE;
-		return r;
+
+	if(pat[0]){
+		rx=rxcompile(pat);
+		if(rx == nil){
+			*foundp = FALSE;
+			return r;
+		}
 	}
 	if(dir == Back)
-		found = rxbexecute(t, r.q0, &sel);
+		found = rxbexecute(rx, t, r.q0, &sel);
 	else{
 		if(lim.q0 < 0)
 			q = Infinity;
 		else
 			q = lim.q1;
-		found = rxexecute(t, nil, r.q1, q, &sel);
+		found = rxexecute(rx, t, nil, r.q1, q, &sel);
 	}
 	if(!found && showerr)
 		warning(nil, "no match for regexp\n");
 	*foundp = found;
+	rxfree(rx);
 	return sel.r[0];
 }
 

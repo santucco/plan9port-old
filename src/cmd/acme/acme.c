@@ -181,7 +181,6 @@ threadmain(int argc, char *argv[])
 
 	iconinit();
 	timerinit();
-	rxinit();
 
 	cwait = threadwaitchan();
 	ccommand = chancreate(sizeof(Command**), 0);

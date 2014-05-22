@@ -10,6 +10,7 @@
 
 #include "a.h"
 #include <libsec.h>
+#include "common.h"
 
 struct Imap
 {
@@ -27,7 +28,6 @@ struct Imap
 	QLock	rlk;
 	Rendez	r;
 
-	Box*		inbox;
 	Box*		box;
 	Box*		nextbox;
 
@@ -150,8 +150,6 @@ imapreconnect(Imap *z)
 
 	z->autoreconnect = 0;
 	z->box = nil;
-	z->inbox = nil;
-
 	if(z->fd >= 0){
 		close(z->fd);
 		z->fd = -1;
@@ -182,7 +180,7 @@ imapreconnect(Imap *z)
 	if(imaplogin(z) < 0)
 		goto err;
 preauth:
-	if(getboxes(z) < 0 || getbox(z, z->inbox) < 0)
+	if(getboxes(z) < 0)
 		goto err;
 	z->autoreconnect = 1;
 	return 0;
@@ -244,10 +242,10 @@ getboxes(Imap *z)
 	if(z->nextbox && z->nextbox->mark)
 		z->nextbox = nil;
 	for(r=boxes, w=boxes, e=boxes+nboxes; r<e; r++){
-		if((*r)->mark)
-{fprint(2, "*** free box %s %s\n", (*r)->name, (*r)->imapname);
+		if((*r)->mark){
+			fprint(2, "*** free box %s %s\n", (*r)->name, (*r)->imapname);
 			boxfree(*r);
-}
+		}
 		else
 			*w++ = *r;
 	}
@@ -278,6 +276,7 @@ getbox(Imap *z, Box *b)
 	}
 	b->nmsg = w - b->msg;
 	b->imapinit = 1;
+	b->maxseen = b->exists;
 	checkbox(z, b);
 	return 0;
 }
@@ -297,7 +296,7 @@ imaptimerproc(void *v)
 	
 	z = v;
 	for(;;){
-		sleep(60*1000);
+		sleep(60*1000/nboxes);
 		qlock(z->r.l);
 		rwakeup(&z->r);
 		qunlock(z->r.l);
@@ -307,15 +306,43 @@ imaptimerproc(void *v)
 static void
 checkbox(Imap *z, Box *b)
 {
+	int i;
+	
 	if(imapcmd(z, b, "NOOP") >= 0){
-		if(!b->imapinit)
+		if(!b->imapinit) {
 			getbox(z, b);
-		if(!b->imapinit)
 			return;
-		if(b==z->box && b->exists > b->maxseen){
-			imapcmd(z, b, "UID FETCH %d:* FULL",
-				b->uidnext);
 		}
+			
+		/*
+		 * RECENT and EXPUNGE info can be not saved between sessions, 
+		 * so changes of a mailbox have to be calculated.
+		 * If EXISTS is more of a count of messages were seen, the rest of the messages
+		 * has to be fetched. But if doesn't mean messages were not expunged.
+		 * So if obtained or calculated RECENT is not zero, a search of expunged messages
+		 * must be done.
+		 */
+		if(b->exists > b->maxseen)
+			imapcmd(z, b, "UID FETCH %d:* FULL", b->uidnext-(b->exists-b->maxseen));
+		if(b->exists != b->maxseen || b->recent) {
+			for(i=0; i<b->nmsg; i++) {
+				b->msg[i]->imapid=0;
+			}
+			imapcmd(z, b, "UID FETCH 1:%d FLAGS", b->uidnext);
+			i=0;
+			while(i < b->nmsg){
+				if(b->msg[i]->imapid != 0){
+					i++;
+					continue;
+				}
+				msgplumb(b->msg[i], 1);
+				msgfree(b->msg[i]);
+				b->nmsg--;
+				memmove(b->msg+i, b->msg+i+1, (b->nmsg-i)*sizeof b->msg[0]);
+			}
+		}
+		b->maxseen = b->exists;
+		b->recent = 0;
 	}
 }
 
@@ -323,17 +350,21 @@ static void
 imaprefreshthread(void *v)
 {
 	Imap *z;
-	
+	int i;
+
 	z = v;
 	for(;;){
-		qlock(z->r.l);
-		rsleep(&z->r);
-		qunlock(z->r.l);
+		for(i=0; i<nboxes; i++) {
+			if(boxes[i]->flags&FlagNoSelect)
+				continue;
+			qlock(z->r.l);
+			rsleep(&z->r);
+			qunlock(z->r.l);
 		
-		qlock(&z->lk);
-		if(z->inbox)
-			checkbox(z, z->inbox);
-		qunlock(&z->lk);
+			qlock(&z->lk);
+			checkbox(z, boxes[i]);
+			qunlock(&z->lk);
+		}
 	}
 }
 
@@ -345,7 +376,7 @@ imapvcmdsx0(Imap *z, char *fmt, va_list arg, int dotag)
 {
 	char *s;
 	Fmt f;
-	int prefix, len;
+	int len;
 	Sx *sx;
 	
 	if(canqlock(&z->lk))
@@ -354,7 +385,6 @@ imapvcmdsx0(Imap *z, char *fmt, va_list arg, int dotag)
 	if(z->fd < 0 || !z->connected)
 		return nil;
 
-	prefix = strlen(tag)+1;
 	fmtstrinit(&f);
 	if(dotag)
 		fmtprint(&f, "%s ", tag);
@@ -411,8 +441,6 @@ reconnect:
 	}
 
 	if(b && b != z->box){
-		if(z->box)
-			z->box->imapinit = 0;
 		z->box = b;
 		if((sx=imapcmdsx0(z, "SELECT %Z", b->imapname)) == nil){
 			z->box = nil;
@@ -564,6 +592,43 @@ imapfetchraw(Imap *z, Part *p)
 	fetch1(z, p, "");
 }
 
+
+/*
+ * A fetch of a particular message is too expensive,
+ * so a bunch from 100 messages in around of the message is requested. 
+ * Some simple heuristic is used: bounds of the bunch's range is depends from a previous fetch.
+ * The bounds are composed to be countinious as possible.
+ * An overhead can take a place if messages are read randomized. 
+ */
+
+static void
+fetch2(Imap *z, Part *p)
+{
+	qlock(&z->lk);
+	if(p->msg->box->lbound == p->msg->imapuid+1){
+		p->msg->box->ubound=p->msg->imapuid;
+		p->msg->box->lbound=p->msg->imapuid-101;
+	}
+	else if(p->msg->box->ubound == p->msg->imapuid-1) {
+		p->msg->box->lbound=p->msg->imapuid;
+		p->msg->box->ubound=p->msg->imapuid+101;
+	}
+	else {
+		p->msg->box->lbound=p->msg->imapuid-50;
+		p->msg->box->ubound=p->msg->imapuid+50;
+	}
+	if(p->msg->box->lbound <= 0)
+		p->msg->box->lbound=1;
+	imapcmd(z, p->msg->box, "UID FETCH %d:%d FULL", p->msg->box->lbound, p->msg->box->ubound);
+	qunlock(&z->lk);
+}
+
+void
+imapfetchfull(Imap *z, Part *p)
+{
+	fetch2(z, p);
+}
+
 static int
 imaplistcmd(Imap *z, Box *box, char *before, Msg **m, uint nm, char *after)
 {
@@ -702,7 +767,7 @@ imapsearchbox(Imap *z, Box *b, char *search, Msg ***mm)
 	m = emalloc(nuid*sizeof m[0]);
 	nm = 0;
 	for(i=0; i<nuid; i++)
-		if((m[nm] = msgbyimapuid(b, uid[i], 0)) != nil)
+		if((m[nm] = msgbyimapuid(b, uid[i])) != nil)
 			nm++;
 	*mm = m;
 	free(uid);
@@ -779,7 +844,7 @@ imapdial(char *server, int mode)
 	int p[2];
 	int fd[3];
 	char *tmp;
-	
+
 	switch(mode){
 	default:
 	case Unencrypted:
@@ -790,21 +855,17 @@ imapdial(char *server, int mode)
 		return -1;
 
 	case Tls:
+#ifdef PLAN9PORT
+		USED(tmp);
+		return opensslhandshake(dial(netmkaddr(server, "tcp", "993"), nil, nil, nil));
+#else
 		if(pipe(p) < 0)
 			return -1;
 		fd[0] = dup(p[0], -1);
 		fd[1] = dup(p[0], -1);
 		fd[2] = dup(2, -1);
-#ifdef PLAN9PORT
-		tmp = esmprint("%s:993", server);
-		if(threadspawnl(fd, "/usr/sbin/stunnel3", "stunnel3", "-c", "-r", tmp, nil) < 0
-		    && threadspawnl(fd, "/usr/bin/stunnel3", "stunnel3", "-c", "-r", tmp, nil) < 0
-		    && threadspawnl(fd, "/usr/sbin/stunnel", "stunnel", "-c", "-r", tmp, nil) < 0
-		    && threadspawnl(fd, "/usr/bin/stunnel", "stunnel", "-c", "-r", tmp, nil) < 0){
-#else
 		tmp = esmprint("tcp!%s!993", server);
 		if(threadspawnl(fd, "/bin/tlsclient", "tlsclient", tmp, nil) < 0){
-#endif
 			free(tmp);
 			close(p[0]);
 			close(p[1]);
@@ -816,6 +877,7 @@ imapdial(char *server, int mode)
 		free(tmp);
 		close(p[0]);
 		return p[1];
+#endif
 	
 	case Cmd:
 		if(pipe(p) < 0)
@@ -1275,10 +1337,72 @@ alldollars(char *s)
 	return 1;
 }
 
+
+static char*
+utf7to8(char* s)
+{
+	char* b = s;
+	char* e;
+	char* p;
+	uchar* d;
+	char* res = emalloc(strlen(s));
+	int n, i, c;
+	Rune r;
+	int f = 0;
+
+	if(!res)
+		return s;
+	p = res;
+	while(*b != 0) {
+		if((*b>=0x20 && *b<=0x25) || (*b>=0x27 && *b<=0x7e)){
+			*p++ = *b++;
+			continue;
+		}
+		f = 1;
+		if(*b != '&'){
+			return res;
+		}
+		b++;
+		if(*b=='-'){
+			*p++ = '&';
+			b++;
+			continue;
+		}
+		e = b;
+		while(*e != '-' && *e != 0)
+			e++;
+		if(*e == 0){
+			free(res);
+			return s;
+		}
+		d = emalloc(e - b);
+		n = dec64(d, e - b, b, e - b);
+		if(n == -1) {
+			free(d);
+			free(res);
+			return s;
+		}
+		for(i=0; i < n; i+=2){
+			r = nhgets(d+i);
+			c = runetochar(p, &r);
+			p += c;
+		}
+		*p = 0;
+		free(d);
+		b = e;
+		b++;
+	}
+	*p = 0;
+	if(!f){
+		free(res);
+		return s;
+	}
+	return res;
+}
+
 static void
 xlist(Imap *z, Sx *sx)
 {
-	int inbox;
 	char *s, *t;
 	Box *box;
 
@@ -1288,29 +1412,8 @@ xlist(Imap *z, Sx *sx)
 		s = gsub(s, sx->sx[3]->data, "/");
 	}
 
-	/*
-	 * INBOX is the special imap name for the main mailbox.
-	 * All other mailbox names have the root prefix removed, if applicable.
-	 */
-	inbox = 0;
-	if(cistrcmp(s, "INBOX") == 0){
-		inbox = 1;
-		free(s);
-		s = estrdup("mbox");
-	} else if(z->root && strstr(s, z->root) == s) {
+	if(z->root && strstr(s, z->root) == s) {
 		t = estrdup(s+strlen(z->root));
-		free(s);
-		s = t;
-	}
-	
-	/* 
-	 * Plan 9 calls the main mailbox mbox.  
-	 * Rename any existing mbox by appending a $.
-	 */
-	if(!inbox && strncmp(s, "mbox", 4) == 0 && alldollars(s+4)){
-		t = emalloc(strlen(s)+2);
-		strcpy(t, s);
-		strcat(t, "$");
 		free(s);
 		s = t;
 	}
@@ -1318,9 +1421,30 @@ xlist(Imap *z, Sx *sx)
 	box = boxcreate(s);
 	if(box == nil)
 		return;
+
+	/*
+	 * INBOX is the special imap name for the main mailbox.
+	 * All other mailbox names have the root prefix removed, if applicable.
+	 */
+
+	if(cistrcmp(s, "INBOX") == 0){
+		box->alias = estrdup("mbox");
+	}
+	/* 
+	 * Plan 9 calls the main mailbox mbox.  
+	 * Rename any existing mbox by appending a $.
+	 */
+	else if(strncmp(s, "mbox", 4) == 0 && alldollars(s+4)){
+		t = emalloc(strlen(s)+2);
+		strcpy(t, s);
+		strcat(t, "$");
+		box->alias = t;
+	}
+	free(s);
+
+	box->alias = utf7to8(box->alias);
+
 	box->imapname = estrdup(sx->sx[4]->data);
-	if(inbox)
-		z->inbox = box;
 	box->mark = 0;
 	box->flags = parseflags(sx->sx[2]);
 }
@@ -1328,18 +1452,15 @@ xlist(Imap *z, Sx *sx)
 static void
 xrecent(Imap *z, Sx *sx)
 {
-	if(z->box)
+	if(z->box && (z->box->recent == 0 || sx->sx[1]->number != 0))
 		z->box->recent = sx->sx[1]->number;
 }
 
 static void
 xexists(Imap *z, Sx *sx)
 {
-	if(z->box){
+	if(z->box)
 		z->box->exists = sx->sx[1]->number;
-		if(z->box->exists < z->box->maxseen)
-			z->box->maxseen = z->box->exists;
-	}
 }
 
 static void
@@ -1402,6 +1523,7 @@ xsearch(Imap *z, Sx *sx)
 		z->uid[i] = sx->sx[i+2]->number;
 }
 
+
 /* 
  * Table-driven FETCH message info parser.
  */
@@ -1427,10 +1549,12 @@ static struct {
 static void
 xfetch(Imap *z, Sx *sx)
 {
+	Box *b;
 	int i, j, n, uid;
 	Msg *msg;
+	int new = 0;
 
-	if(z->box == nil){
+	if((b=z->box) == nil){
 		warn("FETCH but no open box: %$", sx);
 		return;
 	}
@@ -1447,25 +1571,33 @@ xfetch(Imap *z, Sx *sx)
 		if(isatom(sx->sx[i], "UID")){
 			if(sx->sx[i+1]->type == SxNumber){
 				uid = sx->sx[i+1]->number;
+				msg = msgbyimapuid(b, uid);
 				goto haveuid;
 			}
 		}
 	}
-/* This happens: too bad.
-	warn("FETCH without UID: %$", sx);
-*/
-	return;
+	/*
+	 * FETCH can be received without UID, e.g. in an untagged respond of UID STORE command 
+	 */ 	
+	msg = msgbyimapid(b, n);
+	if(!msg)
+		return;
 
 haveuid:
-	msg = msgbyimapuid(z->box, uid, 1);
-	if(msg->imapid && msg->imapid != n)
-		warn("msg id mismatch: want %d have %d", msg->id, n);
+	
+	if(msg==0){
+		msg = msgcreate(b);
+		msg->imapuid = uid;
+		new = 1;		
+	}
 	msg->imapid = n;
 	for(i=0; i<sx->nsx; i+=2){
 		for(j=0; j<nelem(msgtab); j++)
 			if(isatom(sx->sx[i], msgtab[j].name))
 				msgtab[j].fn(msg, sx->sx[i], sx->sx[i+1]);
 	}
+	if(new && b->imapinit)
+		msgplumb(msg, 0);
 }
 
 static void
@@ -1547,7 +1679,6 @@ xmsgenvelope(Msg *msg, Sx *k, Sx *v)
 	USED(k);
 	hdrfree(msg->part[0]->hdr);
 	msg->part[0]->hdr = parseenvelope(v);
-	msgplumb(msg, 0);
 }
 
 static struct {
@@ -1662,10 +1793,6 @@ xmsgbody(Msg *msg, Sx *k, Sx *v)
 	 * but the extra layer is redundant - what else would be in a mailbox?
 	 */
 	parsestructure(msg->part[0], v);
-	if(msg->box->maxseen < msg->imapid)
-		msg->box->maxseen = msg->imapid;
-	if(msg->imapuid >= msg->box->uidnext)
-		msg->box->uidnext = msg->imapuid+1;
 }
 
 static void
@@ -1728,6 +1855,7 @@ static void xokpermflags(Imap*, Sx*);
 static void xokunseen(Imap*, Sx*);
 static void xokreadwrite(Imap*, Sx*);
 static void xokreadonly(Imap*, Sx*);
+static void xokuidnext(Imap*, Sx*);
 
 struct {
 	char *name;
@@ -1738,7 +1866,8 @@ struct {
 	"PERMANENTFLAGS", 'L',	xokpermflags,
 	"UNSEEN", 'N',	xokunseen,
 	"READ-WRITE", 0,	xokreadwrite,
-	"READ-ONLY",	0, xokreadonly
+	"READ-ONLY",	0, xokreadonly,
+	"UIDNEXT", 'N',	xokuidnext,
 };
 
 static void
@@ -1821,3 +1950,22 @@ xokreadonly(Imap *z, Sx *sx)
 /*	z->boxmode = OREAD; */
 }
 
+
+/*
+ * If UIDNEXT is changed it can mean new messages have arrived,
+ * even if EXISTS is not changed - some messages can be expunged
+ * when a mailbox is not selected.
+ */
+static void
+xokuidnext(Imap *z, Sx *sx)
+{
+	Box *b;
+	
+	if((b=z->box) == nil)
+		return;
+	if(b->uidnext != sx->number && !b->recent) {
+		b->recent = sx->number - b->uidnext;
+	}
+	b->uidnext = sx->number;
+	
+}

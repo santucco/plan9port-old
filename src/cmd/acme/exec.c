@@ -182,7 +182,8 @@ execute(Text *t, uint aq0, uint aq1, int external, Text *argt)
 	r = runemalloc(q1-q0);
 	bufread(&t->file->b, q0, r, q1-q0);
 	e = lookup(r, q1-q0);
-	if(!external && t->w!=nil && t->w->nopen[QWevent]>0){
+	if(!external && t->w!=nil && t->w->nopen[QWevent]>0 && 
+		(t->w->evtype&EBexecute && t->what == Body || t->w->evtype&ETexecute && t->what != Body)){
 		f = 0;
 		if(e)
 			f |= 1;

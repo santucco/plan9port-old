@@ -94,7 +94,8 @@ look3(Text *t, uint q0, uint q1, int external)
 	if(ct == nil)
 		seltext = t;
 	expanded = expand(t, q0, q1, &e);
-	if(!external && t->w!=nil && t->w->nopen[QWevent]>0){
+	if(!external && t->w!=nil && t->w->nopen[QWevent]>0 && 
+		(t->w->evtype&EBlook && t->what == Body || t->w->evtype&ETlook && t->what != Body)){
 		/* send alphanumeric expansion to external client */
 		if(expanded == FALSE)
 			return;

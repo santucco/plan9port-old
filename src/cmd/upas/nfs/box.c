@@ -27,6 +27,18 @@ boxbyname(char *name)
 }
 
 Box*
+boxbyalias(char *alias)
+{
+	int i;
+
+	/* LATER: replace with hash table */
+	for(i=0; i<nboxes; i++)
+		if(boxes[i] && strcmp(boxes[i]->alias, alias) == 0)
+			return boxes[i];
+	return nil;
+}
+
+Box*
 subbox(Box *b, char *elem)
 {
 	int i;
@@ -73,6 +85,8 @@ boxcreate(char *name)
 		bb = rootbox;
 		b->elem = b->name;
 	}
+	b->alias=b->elem;
+
 	if(nboxes%BoxChunk == 0)
 		boxes = erealloc(boxes, (nboxes+BoxChunk)*sizeof boxes[0]);
 	boxes[nboxes++] = b;
@@ -80,6 +94,7 @@ boxcreate(char *name)
 		bb->sub = erealloc(bb->sub, (bb->nsub+BoxSubChunk)*sizeof bb->sub[0]);
 	bb->sub[bb->nsub++] = b;
 	b->parent = bb;
+
 	return b;
 }
 
@@ -93,7 +108,11 @@ boxfree(Box *b)
 	for(i=0; i<b->nmsg; i++)
 		msgfree(b->msg[i]);
 	free(b->msg);
+	if(b->alias != b->elem)
+		free(b->alias);
+	free(b->name);
 	free(b);
+
 }
 
 Part*
@@ -160,12 +179,11 @@ msgplumb(Msg *m, int delete)
 	static int fd = -1;
 	Plumbmsg p;
 	Plumbattr a[10];
-	char buf[256], date[40];
+	char buf[256], abuf[256], date[40];
 	int ai;
+	Box* par;
 	
-	if(m == nil || m->npart < 1 || m->part[0]->hdr == nil)
-		return;
-	if(m->box && strcmp(m->box->name, "mbox") != 0)
+	if(m == nil)
 		return;
 
 	p.src = "mailfs";
@@ -181,24 +199,26 @@ msgplumb(Msg *m, int delete)
 	a[ai].value = delete?"delete":"new";
 	a[ai-1].next = &a[ai];
 
-	if(m->part[0]->hdr->from){
-		a[++ai].name = "sender";
-		a[ai].value = m->part[0]->hdr->from;
-		a[ai-1].next = &a[ai];
-	}
+	if (m->npart >= 1 && m->part[0]->hdr != nil){
+		if(m->part[0]->hdr->from){
+			a[++ai].name = "sender";
+			a[ai].value = m->part[0]->hdr->from;
+			a[ai-1].next = &a[ai];
+		}
 
-	if(m->part[0]->hdr->subject){
-		a[++ai].name = "subject";
-		a[ai].value = m->part[0]->hdr->subject;
-		a[ai-1].next = &a[ai];
-	}
+		if(m->part[0]->hdr->subject){
+			a[++ai].name = "subject";
+			a[ai].value = m->part[0]->hdr->subject;
+			a[ai-1].next = &a[ai];
+		}
 
-	if(m->part[0]->hdr->digest){
-		a[++ai].name = "digest";
-		a[ai].value = m->part[0]->hdr->digest;
-		a[ai-1].next = &a[ai];
+		if(m->part[0]->hdr->digest){
+			a[++ai].name = "digest";
+			a[ai].value = m->part[0]->hdr->digest;
+			a[ai-1].next = &a[ai];
+		}
 	}
-	
+		
 	strcpy(date, ctime(m->date));
 	date[strlen(date)-1] = 0;	/* newline */
 	a[++ai].name = "date";
@@ -208,11 +228,20 @@ msgplumb(Msg *m, int delete)
 	a[ai].next = nil;
 	
 	p.attr = a;
+	
+	snprint(abuf, sizeof abuf, "%s/%ud", m->box->alias, m->id);
+	par=m->box->parent;
+	while(par != rootbox){
+		snprint(buf, sizeof buf, "%s/%s", par->alias, abuf);
+		strncpy(abuf, buf, sizeof abuf);
+		par=par->parent;	
+	}
 #ifdef PLAN9PORT
-	snprint(buf, sizeof buf, "Mail/%s/%ud", m->box->name, m->id);
+	snprint(buf, sizeof buf, "Mail/%s", abuf);
 #else
-	snprint(buf, sizeof buf, "/mail/fs/%s/%ud", m->box->name, m->id);
+	snprint(buf, sizeof buf, "/mail/fs/", abuf);
 #endif
+
 	p.ndata = strlen(buf);
 	p.data = buf;
 	
@@ -243,36 +272,82 @@ msgcreate(Box *box)
 }
 
 Msg*
-msgbyimapuid(Box *box, uint uid, int docreate)
+bsrch(Box* box, uint id, int(*cmp)(Msg* msg, uint id))
 {
-	int i;
-	Msg *msg;
+	uint first = 0; 
+	uint last = box->nmsg;
+	uint mid = first+(last-first)/2;
 
+	if (box == nil || box->nmsg==0 || cmp(box->msg[0], id)==1 || cmp(box->msg[last-1], id)==-1)
+		return nil;
+	while(first<last){
+		switch(cmp(box->msg[mid], id)){
+		case 0:
+			return box->msg[mid];
+		case 1:
+			last = mid;
+			break;
+		case -1:
+			first = mid+1;
+			break;
+		}
+		mid = first+(last-first)/2;
+	}
+	return nil;
+}
+
+static int
+cmpbyimapuid(Msg* msg, uint id)
+{
+	if(msg->imapuid<id)
+		return -1;
+	else if(msg->imapuid>id)
+		return 1;
+	return 0;
+}
+
+Msg*
+msgbyimapuid(Box *box, uint uid)
+{
 	if(box == nil)
 		return nil;
-	/* LATER: binary search or something */
-	for(i=0; i<box->nmsg; i++)
-		if(box->msg[i]->imapuid == uid)
-			return box->msg[i];
-	if(!docreate)
-		return nil;
-	msg = msgcreate(box);
-	msg->imapuid = uid;
-	return msg;
+	return bsrch(box, uid, cmpbyimapuid);
+}
+
+static int
+cmpbyid(Msg* msg, uint id)
+{
+	if(msg->id<id)
+		return -1;
+	else if(msg->id>id)
+		return 1;
+	return 0;
 }
 
 Msg*
 msgbyid(Box *box, uint id)
 {
-	int i;
-
 	if(box == nil)
 		return nil;
-	/* LATER: binary search or something */
-	for(i=0; i<box->nmsg; i++)
-		if(box->msg[i]->id == id)
-			return box->msg[i];
-	return nil;
+	return bsrch(box, id, cmpbyid);
+}
+
+static int
+cmpbyimapid(Msg* msg, uint id)
+{
+	if(msg->imapid<id)
+		return -1;
+	else if(msg->imapid>id)
+		return 1;
+	return 0;
+}
+
+Msg*
+msgbyimapid(Box *box, uint id)
+{
+	if(box == nil)
+		return nil;
+	return bsrch(box, id, cmpbyimapid);
 }
 
 Part*
