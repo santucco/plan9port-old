@@ -7,6 +7,7 @@
 #include <plumb.h>
 #include <9p.h>
 #include <ctype.h>
+#include <ip.h>
 
 enum
 {

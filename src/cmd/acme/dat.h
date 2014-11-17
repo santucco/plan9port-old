@@ -33,6 +33,19 @@ enum
 	Infinity = 		0x7FFFFFFF	/* huge value for regexp address */
 };
 
+enum
+{
+	EBdelete = 1,
+	ETdelete = 2,
+	EBinsert = 4,
+	ETinsert = 8,
+	EBlook = 16,
+	ETlook = 32,
+	EBexecute = 64,
+	ETexecute = 128,
+	EALL = 255
+};
+
 #define Buffer AcmeBuffer
 typedef	struct	Block Block;
 typedef	struct	Buffer Buffer;
@@ -55,6 +68,7 @@ typedef	struct	Text Text;
 typedef	struct	Timer Timer;
 typedef	struct	Window Window;
 typedef	struct	Xfid Xfid;
+typedef	struct	RX RX;
 
 struct Runestr
 {
@@ -273,6 +287,7 @@ struct Window
 	int		taglines;
 	Rectangle	tagtop;
 	QLock	editoutlk;
+	uchar	evtype;
 };
 
 void	wininit(Window*, Window*, Rectangle);

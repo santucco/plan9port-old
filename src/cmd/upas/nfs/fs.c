@@ -255,7 +255,7 @@ fswalk1(Fid *fid, char *name, void *arg)
 			fid->qid = qid(Qctl, nil, nil, nil);
 			return nil;
 		}
-		if((box = boxbyname(name)) != nil){
+		if((box = boxbyalias(name)) != nil){
 			fid->qid = qid(Qbox, box, nil, nil);
 			return nil;
 		}
@@ -375,6 +375,52 @@ addaddrs(Fmt *fmt, char *prefix, char *addrs)
 	free(addrs);
 }
 
+/*
+ *  If a charset is not utf-8, the message will be converted to utf-8
+ *  For html messages the charset in the body of the message has to be
+ *  corrected too.
+ */
+static char*
+setcharset(Part* p, char* t)
+{
+	char* b = t;
+	char* e;
+	char* e2;
+	char* s;
+	int len;
+	if(cistrcmp(p->type,"text/html") != 0)
+		return t;
+	b = cistrstr(b, "charset=");
+	if(b == 0)
+		return t;
+	b+=8;
+	if(cistrncmp(b, "UTF-8", 5) == 0)
+		return t;
+	e = strchr(b, '"');
+	if(e == 0)
+		return t;
+	e2=strchr(b, ';');
+	if(e2 != 0 && e > e2)
+		e = e2;
+	len=strlen(t);
+	if(e-b < 5){
+		s = emalloc(len-(e-b)+5);
+		strncpy(s, t, b-t);
+		b = s+(b-t);
+		strncpy(b, "UTF-8", 5);
+		b += 5;
+		strncpy(b, e, len-(e-t));
+		free(t);
+		t = s;
+	}
+	else {
+		memmove(b, "UTF-8", 5);
+		b += 5;
+		memmove(b, e, len-(e-t)+1);
+	}
+	return t;
+}
+
 static void
 mkbody(Part *p, Qid q)
 {
@@ -400,6 +446,7 @@ mkbody(Part *p, Qid q)
 	if(p->charset){
 		t = tcs(p->charset, t);
 		len = -1;
+		t=setcharset(p, t);
 	}
 	p->body = t;
 	if(len == -1)
@@ -438,6 +485,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 	case Qbcc:
 	case Qinreplyto:
 	case Qmessageid:
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part->hdr == nil){
 			werrstr(Emsggone);
 			return -1;
@@ -451,6 +500,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 		return 0;
 
 	case Qunixheader:
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part->hdr == nil){
 			werrstr(Emsggone);
 			return -1;
@@ -572,6 +623,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 
 	case Qinfo:
 		fmtstrinit(&fmt);
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part == msg->part[0]){
 			if(msg->date)
 				fmtprint(&fmt, "unixdate %ud %s", msg->date, ctime(msg->date));
@@ -618,6 +671,8 @@ filedata(int type, Box *box, Msg *msg, Part *part, char **pp, int *len, int *fre
 		return 0;
 
 	case Qheader:
+		if(part->hdr == nil)
+			imapfetchfull(imap, part);
 		if(part->hdr == nil)
 			return 0;
 		fmtstrinit(&fmt);
@@ -711,7 +766,7 @@ filldir(Dir *d, int type, Box *box, Msg *msg, Part *part)
 			werrstr(Enobox);
 			return -1;
 		}
-		d->name = estrdup9p(box->elem);
+		d->name = estrdup9p(box->alias);
 		break;
 	case Qmsg:
 		if(msg == nil){
@@ -950,7 +1005,7 @@ mkmsglist(Box *box, char **f, int nf, Msg ***mm)
 static void
 fswrite(Req *r)
 {
-	int i, j, c, type, flag, unflag, flagset, f, reset;
+	int i, j, c, type, flag, unflag, flagset, f;
 	Box *box;
 	Msg *msg;
 	Part *part;
@@ -1076,7 +1131,6 @@ fswrite(Req *r)
 		flag = 0;
 		unflag = 0;
 		flagset = 0;
-		reset = 0;
 		for(i=0; i<cb->nf; i++){
 			f = 0;
 			c = cb->f[i][0];

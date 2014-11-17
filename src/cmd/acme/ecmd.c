@@ -369,17 +369,21 @@ f_cmd(Text *t, Cmd *cp)
 int
 g_cmd(Text *t, Cmd *cp)
 {
+	RX* rx;
 	if(t->file != addr.f){
 		warning(nil, "internal error: g_cmd f!=addr.f\n");
 		return FALSE;
 	}
-	if(rxcompile(cp->re->r) == FALSE)
+	rx = rxcompile(cp->re->r);
+	if(rx == nil)
 		editerror("bad regexp in g command");
-	if(rxexecute(t, nil, addr.r.q0, addr.r.q1, &sel) ^ cp->cmdc=='v'){
+	if(rxexecute(rx, t, nil, addr.r.q0, addr.r.q1, &sel) ^ cp->cmdc=='v'){
 		t->q0 = addr.r.q0;
 		t->q1 = addr.r.q1;
+		rxfree(rx);
 		return cmdexec(t, cp->u.cmd);
 	}
+	rxfree(rx);
 	return TRUE;
 }
 
@@ -452,16 +456,18 @@ s_cmd(Text *t, Cmd *cp)
 	Rangeset *rp;
 	char *err;
 	Rune *rbuf;
-
+	RX* rx;
+	
 	n = cp->num;
 	op= -1;
-	if(rxcompile(cp->re->r) == FALSE)
+	rx = rxcompile(cp->re->r);
+	if(rx == nil)
 		editerror("bad regexp in s command");
 	nrp = 0;
 	rp = nil;
 	delta = 0;
 	didsub = FALSE;
-	for(p1 = addr.r.q0; p1<=addr.r.q1 && rxexecute(t, nil, p1, addr.r.q1, &sel); ){
+	for(p1 = addr.r.q0; p1<=addr.r.q1 && rxexecute(rx, t, nil, p1, addr.r.q1, &sel); ){
 		if(sel.r[0].q0 == sel.r[0].q1){	/* empty match? */
 			if(sel.r[0].q0 == op){
 				p1++;
@@ -515,6 +521,7 @@ s_cmd(Text *t, Cmd *cp)
 		if(!cp->flag)
 			break;
 	}
+	rxfree(rx);
 	free(rp);
 	freestring(buf);
 	fbuffree(rbuf);
@@ -525,6 +532,7 @@ s_cmd(Text *t, Cmd *cp)
 	return TRUE;
 
 Err:
+	rxfree(rx);
 	free(rp);
 	freestring(buf);
 	fbuffree(rbuf);
@@ -822,16 +830,18 @@ looper(File *f, Cmd *cp, int xy)
 	long p, op, nrp;
 	Range r, tr;
 	Range *rp;
-
+	RX* rx;
+	
 	r = addr.r;
 	op= xy? -1 : r.q0;
 	nest++;
-	if(rxcompile(cp->re->r) == FALSE)
+	rx = rxcompile(cp->re->r);
+	if(rx == nil)
 		editerror("bad regexp in %c command", cp->cmdc);
 	nrp = 0;
 	rp = nil;
 	for(p = r.q0; p<=r.q1; ){
-		if(!rxexecute(f->curtext, nil, p, r.q1, &sel)){ /* no match, but y should still run */
+		if(!rxexecute(rx, f->curtext, nil, p, r.q1, &sel)){ /* no match, but y should still run */
 			if(xy || op>r.q1)
 				break;
 			tr.q0 = op, tr.q1 = r.q1;
@@ -856,6 +866,7 @@ looper(File *f, Cmd *cp, int xy)
 		rp[nrp-1] = tr;
 	}
 	loopcmd(f, cp->u.cmd, rp, nrp);
+	rxfree(rx);
 	free(rp);
 	--nest;
 }
@@ -982,27 +993,30 @@ filelooper(Cmd *cp, int XY)
 void
 nextmatch(File *f, String *r, long p, int sign)
 {
-	if(rxcompile(r->r) == FALSE)
+	RX* rx;
+	rx = rxcompile(r->r);
+	if(rx == nil)
 		editerror("bad regexp in command address");
 	if(sign >= 0){
-		if(!rxexecute(f->curtext, nil, p, 0x7FFFFFFFL, &sel))
+		if(!rxexecute(rx, f->curtext, nil, p, 0x7FFFFFFFL, &sel))
 			editerror("no match for regexp");
 		if(sel.r[0].q0==sel.r[0].q1 && sel.r[0].q0==p){
 			if(++p>f->b.nc)
 				p = 0;
-			if(!rxexecute(f->curtext, nil, p, 0x7FFFFFFFL, &sel))
+			if(!rxexecute(rx, f->curtext, nil, p, 0x7FFFFFFFL, &sel))
 				editerror("address");
 		}
 	}else{
-		if(!rxbexecute(f->curtext, p, &sel))
+		if(!rxbexecute(rx, f->curtext, p, &sel))
 			editerror("no match for regexp");
 		if(sel.r[0].q0==sel.r[0].q1 && sel.r[0].q1==p){
 			if(--p<0)
 				p = f->b.nc;
-			if(!rxbexecute(f->curtext, p, &sel))
+			if(!rxbexecute(rx, f->curtext, p, &sel))
 				editerror("address");
 		}
 	}
+	rxfree(rx);
 }
 
 File	*matchfile(String*);
@@ -1178,9 +1192,10 @@ filematch(File *f, String *r)
 	Window *w;
 	int match, i, dirty;
 	Rangeset s;
-
+	RX* rx;
 	/* compile expr first so if we get an error, we haven't allocated anything */
-	if(rxcompile(r->r) == FALSE)
+	rx = rxcompile(r->r);
+	if(rx == nil)
 		editerror("bad regexp in file match");
 	buf = fbufalloc();
 	w = f->curtext->w;
@@ -1190,7 +1205,8 @@ filematch(File *f, String *r)
 		'+', " ."[curtext!=nil && curtext->file==f], f->nname, f->name);
 	rbuf = bytetorune(buf, &i);
 	fbuffree(buf);
-	match = rxexecute(nil, rbuf, 0, i, &s);
+	match = rxexecute(rx, nil, rbuf, 0, i, &s);
+	rxfree(rx);
 	free(rbuf);
 	return match;
 }
